@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@9.12.2",
   "scripts": {
-    "install": "pnpm install",
+    "install": "echo 'Use: pnpm install'",
     "dev": "pnpm --parallel --filter @poker/server --filter @poker/web dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",

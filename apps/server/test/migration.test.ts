@@ -26,10 +26,21 @@ describe("initial migration", () => {
       expect.arrayContaining(["id", "game_id", "socket_id", "nickname", "seat_index", "created_at"])
     );
 
-    const indexes = db.public.many("SELECT indexname FROM pg_indexes WHERE tablename = 'player_sessions'");
-
-    expect(indexes.map((row) => row.indexname)).toEqual(
-      expect.arrayContaining(["player_sessions_unique_seat_per_game", "player_sessions_game_id_idx"])
+    const game = db.public.one(`INSERT INTO games (variant) VALUES ('HOLD_EM_NO_LIMIT') RETURNING id`) as { id: number };
+    db.public.none(
+      `INSERT INTO player_sessions (game_id, socket_id, nickname, seat_index) VALUES (${game.id}, 'sock-1', 'alice', 0)`
     );
+
+    expect(() => {
+      db.public.none(
+        `INSERT INTO player_sessions (game_id, socket_id, nickname, seat_index) VALUES (${game.id}, 'sock-2', 'alice', 1)`
+      );
+    }).toThrow();
+
+    expect(() => {
+      db.public.none(
+        `INSERT INTO player_sessions (game_id, socket_id, nickname, seat_index) VALUES (${game.id}, 'sock-3', 'bob', 0)`
+      );
+    }).toThrow();
   });
 });

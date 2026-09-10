@@ -52,7 +52,7 @@ export function registerSocket(httpServer: HttpServer, frontendUrl: string) {
       event: TEvent,
       handler: (payload: ClientEventPayload<TEvent>) => void
     ) => {
-      socket.on(event, (payload: unknown) => {
+      (socket as any).on(event, (payload: unknown) => {
         if (!validateClientEvent(event, payload)) {
           socket.emit("ACTION_REJECTED", {
             event,
