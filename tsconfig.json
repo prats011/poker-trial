@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@poker/protocol": ["packages/protocol/src/index.ts"],
+      "@poker/engine": ["packages/engine/src/index.ts"],
+      "@poker/ui": ["packages/ui/src/index.ts"]
+    }
+  }
+}
