@@ -9,3 +9,16 @@ body {
   background: var(--background);
   color: var(--foreground);
 }
+
+@keyframes poker-deal {
+  from { opacity: 0; transform: translateY(-6px) scale(.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.poker-deal-card {
+  animation: poker-deal 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .poker-deal-card { animation: none; }
+}

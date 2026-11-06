@@ -3,7 +3,7 @@ import { z } from "zod";
 export const gameVariantSchema = z.enum(["HOLD_EM_NO_LIMIT", "OMAHA_HI", "PLO_DOUBLE_BOARD_BOMB_POT"]);
 export type GameVariant = z.infer<typeof gameVariantSchema>;
 
-export const gameStatusSchema = z.enum(["WAITING", "PREPARING"]);
+export const gameStatusSchema = z.enum(["WAITING", "PREPARING", "PAUSE_PENDING", "PAUSED", "END_PENDING", "ENDED"]);
 export type GameStatus = z.infer<typeof gameStatusSchema>;
 
 export const gameConfigurationSchema = z.object({
@@ -12,13 +12,25 @@ export const gameConfigurationSchema = z.object({
   smallBlind: z.number().int().positive().max(10_000_000),
   bigBlind: z.number().int().positive().max(10_000_000),
   turnTimerSeconds: z.number().int().positive().max(3600),
-  maxPlayers: z.number().int().min(2).max(10)
+  maxPlayers: z.number().int().min(2).max(10),
+  rebuysEnabled: z.boolean().default(true),
+  rebuyMinAmount: z.number().int().positive().max(10_000_000).default(100),
+  rebuyMaxAmount: z.number().int().positive().max(10_000_000).optional(),
+  rebuyDecisionTimeSec: z.number().int().positive().max(3600).default(15)
 }).superRefine((value, ctx) => {
   if (value.bigBlind <= value.smallBlind) {
     ctx.addIssue({ code: "custom", path: ["bigBlind"], message: "Big blind must be greater than small blind" });
   }
+  const maximum = value.rebuyMaxAmount ?? value.startingStack;
+  if (value.rebuyMinAmount > maximum) {
+    ctx.addIssue({ code: "custom", path: ["rebuyMinAmount"], message: "Minimum rebuy must not exceed maximum rebuy" });
+  }
+  if (maximum > value.startingStack) {
+    ctx.addIssue({ code: "custom", path: ["rebuyMaxAmount"], message: "Maximum rebuy must not exceed the starting stack" });
+  }
 });
-export type GameConfiguration = z.infer<typeof gameConfigurationSchema>;
+export type GameConfiguration = z.output<typeof gameConfigurationSchema>;
+export type GameConfigurationInput = z.input<typeof gameConfigurationSchema>;
 
 export const nicknameSchema = z.string()
   .trim()
@@ -31,7 +43,9 @@ export const tablePlayerSchema = z.object({
   nickname: z.string(),
   seatIndex: z.number().int().nonnegative().nullable(),
   isHost: z.boolean(),
-  connectionStatus: z.enum(["CONNECTED", "DISCONNECTED"])
+  connectionStatus: z.enum(["CONNECTED", "DISCONNECTED"]),
+  stack: z.number().int().nonnegative().nullable(),
+  sittingOut: z.boolean()
 });
 export type TablePlayer = z.infer<typeof tablePlayerSchema>;
 
@@ -68,6 +82,13 @@ export const requestSeatSchema = z.object({ seatIndex: z.number().int().nonnegat
 export const leaveSeatSchema = z.object({ reason: z.string().trim().max(120).optional() });
 export const updateGameSettingsSchema = gameConfigurationSchema;
 export const startGameSchema = z.object({});
+export const pauseGameSchema = z.object({});
+export const resumeGameSchema = z.object({});
+export const endGameSchema = z.object({});
+export const rebuyRequestSchema = z.object({ amount: z.number().int() });
+export const declineRebuySchema = z.object({});
+export const sitOutSchema = z.object({});
+export const returnToPlaySchema = z.object({});
 export const removePlayerSchema = z.object({ sessionId: z.string().min(1) });
 export const chatSendSchema = z.object({ message: z.string().trim().min(1).max(240) });
 
@@ -84,6 +105,7 @@ export const actionRejectedSchema = z.object({
     "SEAT_OCCUPIED", "NO_SEAT", "RATE_LIMITED", "SESSION_EXPIRED", "NOT_FOUND", "INVALID_GAME_STATE",
     "INVALID_PLAYER", "PLAYER_NOT_ACTIVE", "NOT_PLAYER_TURN", "INSUFFICIENT_CHIPS", "INVALID_BET_AMOUNT",
     "BET_BELOW_MINIMUM", "RAISE_BELOW_MINIMUM", "RAISE_EXCEEDS_POT", "ACTION_NOT_ALLOWED", "STALE_STATE"
+    , "REBUY_NOT_AVAILABLE", "INVALID_REBUY_AMOUNT", "GAME_ENDED"
   ]),
   message: z.string()
 });
@@ -153,7 +175,14 @@ export const clientEventSchemas = {
   START_GAME: startGameSchema,
   CHAT_SEND: chatSendSchema,
   REMOVE_PLAYER: removePlayerSchema,
-  POKER_ACTION: pokerActionSchema
+  POKER_ACTION: pokerActionSchema,
+  PAUSE_GAME: pauseGameSchema,
+  RESUME_GAME: resumeGameSchema,
+  END_GAME: endGameSchema,
+  REBUY_REQUEST: rebuyRequestSchema,
+  DECLINE_REBUY: declineRebuySchema,
+  SIT_OUT: sitOutSchema,
+  RETURN_TO_PLAY: returnToPlaySchema
 } as const;
 export const serverEventSchemas = {
   TABLE_STATE_SNAPSHOT: tableStateSnapshotSchema,
@@ -165,6 +194,14 @@ export const serverEventSchemas = {
   ACTION_REJECTED: actionRejectedSchema,
   CHAT_MESSAGE: chatMessageSchema,
   PLAYER_PRESENCE: playerPresenceSchema,
+  REBUY_STATUS_UPDATED: z.object({
+    sessionId: z.string(),
+    eligible: z.boolean(),
+    expiresAt: z.string().nullable(),
+    remainingSeconds: z.number().int().nonnegative().nullable()
+  }),
+  GAME_LIFECYCLE_UPDATED: z.object({ status: gameStatusSchema, stateVersion: z.number().int().nonnegative() }),
+  GAME_ENDED: z.object({ reason: z.string() }),
   POKER_STATE_SNAPSHOT: z.object({ pokerState: pokerStateViewSchema })
 } as const;
 export type ClientEventName = keyof typeof clientEventSchemas;

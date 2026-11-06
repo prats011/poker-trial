@@ -230,4 +230,43 @@ describe("server foundation", () => {
     host.disconnect();
     player.disconnect();
   });
+
+  it("enforces host lifecycle permissions and invalidates invites after ending", async () => {
+    const created = await request(baseUrl).post("/api/games").send({
+      nickname: "Host",
+      configuration: { variant: "HOLD_EM_NO_LIMIT", startingStack: 1000, smallBlind: 5, bigBlind: 10, turnTimerSeconds: 30, maxPlayers: 2 }
+    });
+    const joined = await request(baseUrl).post(`/api/games/${created.body.inviteToken}/join`).send({ nickname: "Player 2" });
+    const host = clientIo(baseUrl, { transports: ["websocket"] });
+    const player = clientIo(baseUrl, { transports: ["websocket"] });
+    await Promise.all([
+      new Promise<void>((resolve, reject) => {
+        host.on("connect", () => { host.emit("JOIN_TABLE", { inviteToken: created.body.inviteToken, nickname: "Host", sessionId: created.body.sessionId }); resolve(); });
+        host.on("connect_error", reject);
+      }),
+      new Promise<void>((resolve, reject) => {
+        player.on("connect", () => { player.emit("JOIN_TABLE", { inviteToken: created.body.inviteToken, nickname: "Player 2", sessionId: joined.body.sessionId }); resolve(); });
+        player.on("connect_error", reject);
+      })
+    ]);
+    const unauthorized = new Promise<{ code: string }>((resolve) => player.once("ACTION_REJECTED", resolve));
+    player.emit("PAUSE_GAME", {});
+    expect((await unauthorized).code).toBe("UNAUTHORIZED");
+    const unauthorizedResume = new Promise<{ code: string }>((resolve) => player.once("ACTION_REJECTED", resolve));
+    player.emit("RESUME_GAME", {});
+    expect((await unauthorizedResume).code).toBe("UNAUTHORIZED");
+    const unauthorizedEnd = new Promise<{ code: string }>((resolve) => player.once("ACTION_REJECTED", resolve));
+    player.emit("END_GAME", {});
+    expect((await unauthorizedEnd).code).toBe("UNAUTHORIZED");
+    const paused = new Promise<{ status: string }>((resolve) => host.once("GAME_LIFECYCLE_UPDATED", resolve));
+    host.emit("PAUSE_GAME", {});
+    expect((await paused).status).toBe("PAUSED");
+    host.emit("RESUME_GAME", {});
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    host.emit("END_GAME", {});
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await request(baseUrl).get(`/api/games/${created.body.inviteToken}`)).statusCode).toBe(404);
+    host.disconnect();
+    player.disconnect();
+  });
 });

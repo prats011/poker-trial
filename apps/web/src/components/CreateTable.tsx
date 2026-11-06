@@ -15,6 +15,10 @@ export function CreateTable() {
   const [smallBlind, setSmallBlind] = useState("5");
   const [bigBlind, setBigBlind] = useState("10");
   const [turnTimerSeconds, setTurnTimerSeconds] = useState("30");
+  const [rebuysEnabled, setRebuysEnabled] = useState(true);
+  const [rebuyMinAmount, setRebuyMinAmount] = useState("100");
+  const [rebuyMaxAmount, setRebuyMaxAmount] = useState("1000");
+  const [rebuyDecisionTimeSec, setRebuyDecisionTimeSec] = useState("15");
   const [result, setResult] = useState<string>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -32,7 +36,11 @@ export function CreateTable() {
           startingStack: Number(startingStack),
           smallBlind: Number(smallBlind),
           bigBlind: Number(bigBlind),
-          turnTimerSeconds: Number(turnTimerSeconds)
+          turnTimerSeconds: Number(turnTimerSeconds),
+          rebuysEnabled,
+          rebuyMinAmount: Number(rebuyMinAmount),
+          rebuyMaxAmount: Number(rebuyMaxAmount),
+          rebuyDecisionTimeSec: Number(rebuyDecisionTimeSec)
         }
       });
       const url = `${window.location.origin}/game/${data.inviteToken}`;
@@ -79,6 +87,14 @@ export function CreateTable() {
           <label className="block space-y-2 text-sm"><span>Turn timer (seconds)</span><Input type="number" min="1" value={turnTimerSeconds} onChange={(e) => setTurnTimerSeconds(e.target.value)} /></label>
           <label className="block space-y-2 text-sm"><span>Small blind</span><Input type="number" min="1" value={smallBlind} onChange={(e) => setSmallBlind(e.target.value)} /></label>
           <label className="block space-y-2 text-sm"><span>Big blind</span><Input type="number" min="1" value={bigBlind} onChange={(e) => setBigBlind(e.target.value)} /></label>
+        </div>
+        <div className="rounded-lg border border-[#30363d] bg-[#0f1115] p-4">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={rebuysEnabled} onChange={(e) => setRebuysEnabled(e.target.checked)} /> Enable play-money rebuys</label>
+          {rebuysEnabled && <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <label className="block space-y-2 text-sm"><span>Minimum rebuy</span><Input type="number" min="1" value={rebuyMinAmount} onChange={(e) => setRebuyMinAmount(e.target.value)} /></label>
+            <label className="block space-y-2 text-sm"><span>Maximum rebuy</span><Input type="number" min="1" value={rebuyMaxAmount} onChange={(e) => setRebuyMaxAmount(e.target.value)} /></label>
+            <label className="block space-y-2 text-sm"><span>Decision time (seconds)</span><Input type="number" min="1" value={rebuyDecisionTimeSec} onChange={(e) => setRebuyDecisionTimeSec(e.target.value)} /></label>
+          </div>}
         </div>
         {error && <p role="alert" className="rounded-md border border-[#f85149]/40 bg-[#f85149]/10 p-3 text-sm text-[#ffb4ad]">{error}</p>}
         {!result ? <Button type="submit" disabled={busy}>{busy ? "Creating…" : "Create table"}</Button> : (

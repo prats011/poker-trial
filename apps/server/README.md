@@ -16,3 +16,16 @@ is actionable or a hand completes.
 `HOLD_EM_NO_LIMIT` and `OMAHA_HI` are integrated. The double-board bomb-pot
 variant remains a definition-only engine variant and is rejected by the server
 hand starter until its gameplay sequence is implemented.
+
+## Table lifecycle
+
+`WAITING` and `PREPARING` are the normal lobby and hand-running states.
+`PAUSE_PENDING` and `END_PENDING` are safe-boundary requests: the active hand
+continues through showdown and payout, then transitions to `PAUSED` or `ENDED`.
+`PAUSED` permits rebuy decisions but never starts a hand; `ENDED` invalidates
+the invite, rejects poker actions and clears turn/rebuy timers.
+
+After payout, a zero-stack seated player receives one server-owned rebuy offer
+for the configured decision window. A valid rebuy is applied only while the
+hand is `HAND_COMPLETE`; decline or expiry marks the player sitting out.
+Rebuy offers and their absolute expiry are restored on session reconnect.

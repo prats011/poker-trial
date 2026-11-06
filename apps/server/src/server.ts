@@ -58,7 +58,8 @@ export async function createServer(overrides?: Partial<AppEnv>): Promise<AppServ
         TABLE_FULL: "This table is full.",
         NICKNAME_TAKEN: "That nickname is already taken.",
         SESSION_EXPIRED: "Your session has expired. Please join again.",
-        UNAUTHORIZED: "That session does not match this nickname."
+        UNAUTHORIZED: "That session does not match this nickname.",
+        GAME_ENDED: "This game has ended."
       };
       return reply.status(code === "SESSION_EXPIRED" || code === "UNAUTHORIZED" ? 401 : 409)
         .send({ error: messages[code] ?? "Unable to join this game." });

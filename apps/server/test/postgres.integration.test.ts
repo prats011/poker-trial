@@ -58,7 +58,13 @@ describePostgres("PostgreSQL persistence", () => {
       });
       expect(game.rowCount).toBe(1);
       expect(game.rows[0].invite_token_hash).not.toBe(created.inviteToken);
-      expect(game.rows[0].configuration).toEqual(configuration);
+      expect(game.rows[0].configuration).toEqual({
+        ...configuration,
+        rebuysEnabled: true,
+        rebuyMinAmount: 100,
+        rebuyMaxAmount: 1000,
+        rebuyDecisionTimeSec: 15
+      });
       expect(session.rowCount).toBe(1);
       expect(session.rows[0].session_id_hash).not.toBe(created.session.id);
 
@@ -72,6 +78,22 @@ describePostgres("PostgreSQL persistence", () => {
       });
       expect(updated.rows[0].seat_index).toBe(2);
       expect(updated.rows[0].updated_at).toBeDefined();
+
+      created.game.status = "PAUSED";
+      store.markGameChanged(created.game);
+      const paused = await waitFor(async () => {
+        const result = await pool.query("SELECT status FROM games WHERE id = $1", [created.game.id]);
+        return result.rows[0]?.status === "PAUSED" ? result : undefined;
+      });
+      expect(paused.rows[0].status).toBe("PAUSED");
+
+      created.game.status = "ENDED";
+      store.markGameChanged(created.game);
+      const ended = await waitFor(async () => {
+        const result = await pool.query("SELECT status FROM games WHERE id = $1", [created.game.id]);
+        return result.rows[0]?.status === "ENDED" ? result : undefined;
+      });
+      expect(ended.rows[0].status).toBe("ENDED");
     } finally {
       await pool.end();
       const cleanup = new pg.Client({ connectionString });
