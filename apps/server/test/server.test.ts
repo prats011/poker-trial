@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
 import { io as clientIo, type Socket } from "socket.io-client";
 import { createServer } from "../src/server";
+import type { PokerStateView } from "@poker/protocol";
 
 process.env.DATABASE_URL = process.env.DATABASE_URL ?? "******localhost:5432/poker_trial";
 process.env.FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:3000";
@@ -153,5 +154,80 @@ describe("server foundation", () => {
     });
     expect(invalid.statusCode).toBe(401);
     expect(invalid.body.error).toContain("session");
+  });
+
+  it("starts a private Hold'em hand, validates actions, and pays out a fold", async () => {
+    const created = await request(baseUrl).post("/api/games").send({
+      nickname: "Host",
+      configuration: { variant: "HOLD_EM_NO_LIMIT", startingStack: 1000, smallBlind: 5, bigBlind: 10, turnTimerSeconds: 30, maxPlayers: 2 }
+    });
+    const joined = await request(baseUrl).post(`/api/games/${created.body.inviteToken}/join`).send({ nickname: "Player 2" });
+    const host = clientIo(baseUrl, { transports: ["websocket"] });
+    const player = clientIo(baseUrl, { transports: ["websocket"] });
+    await Promise.all([host, player].map((client, index) => new Promise<void>((resolve, reject) => {
+      client.on("connect", () => {
+        client.emit("JOIN_TABLE", {
+          inviteToken: created.body.inviteToken,
+          nickname: index === 0 ? "Host" : "Player 2",
+          sessionId: index === 0 ? created.body.sessionId : joined.body.sessionId
+        });
+        resolve();
+      });
+      client.on("connect_error", reject);
+    })));
+    host.emit("REQUEST_SEAT", { seatIndex: 0 });
+    player.emit("REQUEST_SEAT", { seatIndex: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const hostSnapshot = new Promise<{ pokerState: PokerStateView }>((resolve) => host.once("POKER_STATE_SNAPSHOT", resolve));
+    const playerSnapshot = new Promise<{ pokerState: PokerStateView }>((resolve) => player.once("POKER_STATE_SNAPSHOT", resolve));
+    host.emit("START_GAME", {});
+    const [hostView, playerView] = await Promise.all([hostSnapshot, playerSnapshot]);
+    expect(hostView.pokerState.players.find((item) => item.playerId === created.body.sessionId)?.holeCards).toHaveLength(2);
+    expect(playerView.pokerState.players.find((item) => item.playerId === created.body.sessionId)?.holeCards).toHaveLength(0);
+    expect(JSON.stringify(hostView)).not.toContain('"deck"');
+    expect(JSON.stringify(hostView)).not.toContain('"burnCards"');
+    expect(JSON.stringify(playerView)).not.toContain('"deck"');
+    expect(JSON.stringify(playerView)).not.toContain('"burnCards"');
+    const turn = hostView.pokerState.currentPlayerId === created.body.sessionId ? host : player;
+    const turnSession = hostView.pokerState.currentPlayerId === created.body.sessionId ? created.body.sessionId : joined.body.sessionId;
+    const stale = new Promise<{ code: string }>((resolve) => turn.once("ACTION_REJECTED", resolve));
+    turn.emit("POKER_ACTION", { type: "FOLD", stateVersion: hostView.pokerState.stateVersion - 1 });
+    expect((await stale).code).toBe("STALE_STATE");
+    const complete = new Promise<{ pokerState: PokerStateView }>((resolve) => host.once("POKER_STATE_SNAPSHOT", resolve));
+    turn.emit("POKER_ACTION", { type: "FOLD", stateVersion: hostView.pokerState.stateVersion });
+    const finished = await complete;
+    expect(finished.pokerState.status).toBe("HAND_COMPLETE");
+    expect(finished.pokerState.payouts?.length).toBeGreaterThan(0);
+    const completedRejection = new Promise<{ code: string }>((resolve) => turn.once("ACTION_REJECTED", resolve));
+    turn.emit("POKER_ACTION", { type: "FOLD", stateVersion: finished.pokerState.stateVersion });
+    expect((await completedRejection).code).toBe("INVALID_GAME_STATE");
+    expect(turnSession).toBeTruthy();
+    host.disconnect();
+    player.disconnect();
+  });
+
+  it("deals four private cards for an Omaha hand", async () => {
+    const created = await request(baseUrl).post("/api/games").send({
+      nickname: "Host",
+      configuration: { variant: "OMAHA_HI", startingStack: 1000, smallBlind: 5, bigBlind: 10, turnTimerSeconds: 30, maxPlayers: 2 }
+    });
+    const joined = await request(baseUrl).post(`/api/games/${created.body.inviteToken}/join`).send({ nickname: "Player 2" });
+    const host = clientIo(baseUrl, { transports: ["websocket"] });
+    const player = clientIo(baseUrl, { transports: ["websocket"] });
+    await Promise.all([host, player].map((client, index) => new Promise<void>((resolve, reject) => {
+      client.on("connect", () => {
+        client.emit("JOIN_TABLE", { inviteToken: created.body.inviteToken, nickname: index === 0 ? "Host" : "Player 2", sessionId: index === 0 ? created.body.sessionId : joined.body.sessionId });
+        resolve();
+      });
+      client.on("connect_error", reject);
+    })));
+    host.emit("REQUEST_SEAT", { seatIndex: 0 });
+    player.emit("REQUEST_SEAT", { seatIndex: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const snapshot = new Promise<{ pokerState: PokerStateView }>((resolve) => host.once("POKER_STATE_SNAPSHOT", resolve));
+    host.emit("START_GAME", {});
+    expect((await snapshot).pokerState.players.find((item) => item.playerId === created.body.sessionId)?.holeCards).toHaveLength(4);
+    host.disconnect();
+    player.disconnect();
   });
 });

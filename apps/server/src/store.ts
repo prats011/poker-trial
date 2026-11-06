@@ -1,5 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { GameConfiguration, GameStatus, TablePlayer, TableSeat, TableState } from "@poker/protocol";
+import type { Payout } from "@poker/engine";
+import type { PokerState } from "@poker/engine";
 
 export type Session = {
   id: string;
@@ -22,6 +24,8 @@ export type Game = {
   updatedAt: string;
   sessions: Map<string, Session>;
   stateVersion: number;
+  pokerState?: PokerState;
+  lastPayouts?: Payout[];
 };
 
 export type CreateGameResult = { game: Game; inviteToken: string; session: Session };
@@ -157,7 +161,14 @@ export class GameStore {
     if (this.persistence) this.persist(this.persistence.updateGame(game));
   }
 
+  markGameChanged(game: Game) {
+    game.stateVersion += 1;
+    game.updatedAt = new Date().toISOString();
+    if (this.persistence) this.persist(this.persistence.updateGame(game));
+  }
+
   removeSession(game: Game, sessionId: string) {
+    if (game.status !== "WAITING") throw new Error("GAME_STARTED");
     if (sessionId === game.hostSessionId) throw new Error("UNAUTHORIZED");
     const session = game.sessions.get(sessionId);
     if (!session) throw new Error("NOT_FOUND");
