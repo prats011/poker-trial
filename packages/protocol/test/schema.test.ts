@@ -4,16 +4,16 @@ import { clientEventSchemas, serverEventSchemas, tableStateSchema } from "../src
 describe("protocol schemas", () => {
   it("accepts valid table state", () => {
     const parsed = tableStateSchema.parse({
-      tableId: "table-1",
-      inviteToken: "abc123",
-      variant: "HOLD_EM_NO_LIMIT",
-      stage: "WAITING",
+      gameId: "game-1",
+      configuration: { variant: "HOLD_EM_NO_LIMIT", startingStack: 1000, smallBlind: 5, bigBlind: 10, turnTimerSeconds: 30, maxPlayers: 6 },
+      status: "WAITING",
+      hostSessionId: "session-1",
+      players: [],
       stateVersion: 0,
-      seats: [{ seatIndex: 0, occupiedBySessionId: null, occupiedByNickname: null }],
-      connectedSessionIds: []
+      seats: [{ seatIndex: 0, occupiedBySessionId: null, occupiedByNickname: null }]
     });
 
-    expect(parsed.tableId).toBe("table-1");
+    expect(parsed.gameId).toBe("game-1");
   });
 
   it("rejects invalid join payload", () => {
