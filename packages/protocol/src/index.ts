@@ -79,9 +79,64 @@ export const gameSettingsUpdatedSchema = z.object({ configuration: gameConfigura
 export const gameStatusUpdatedSchema = z.object({ status: gameStatusSchema, stateVersion: z.number().int().nonnegative() });
 export const actionRejectedSchema = z.object({
   event: z.string(),
-  code: z.enum(["INVALID_PAYLOAD", "INVALID_INVITE", "UNAUTHORIZED", "NICKNAME_TAKEN", "TABLE_FULL", "GAME_STARTED", "SEAT_OCCUPIED", "NO_SEAT", "RATE_LIMITED", "SESSION_EXPIRED", "NOT_FOUND"]),
+  code: z.enum([
+    "INVALID_PAYLOAD", "INVALID_INVITE", "UNAUTHORIZED", "NICKNAME_TAKEN", "TABLE_FULL", "GAME_STARTED",
+    "SEAT_OCCUPIED", "NO_SEAT", "RATE_LIMITED", "SESSION_EXPIRED", "NOT_FOUND", "INVALID_GAME_STATE",
+    "INVALID_PLAYER", "PLAYER_NOT_ACTIVE", "NOT_PLAYER_TURN", "INSUFFICIENT_CHIPS", "INVALID_BET_AMOUNT",
+    "BET_BELOW_MINIMUM", "RAISE_BELOW_MINIMUM", "RAISE_EXCEEDS_POT", "ACTION_NOT_ALLOWED", "STALE_STATE"
+  ]),
   message: z.string()
 });
+export const pokerActionSchema = z.object({
+  type: z.enum(["FOLD", "CHECK", "CALL", "BET", "RAISE", "ALL_IN"]),
+  amount: z.number().int().nonnegative().optional(),
+  stateVersion: z.number().int().nonnegative().optional()
+});
+export type PokerAction = z.infer<typeof pokerActionSchema>;
+export const pokerPlayerViewSchema = z.object({
+  playerId: z.string(),
+  nickname: z.string(),
+  seatIndex: z.number().int().nonnegative(),
+  stack: z.number().int().nonnegative(),
+  streetContribution: z.number().int().nonnegative(),
+  handContribution: z.number().int().nonnegative(),
+  folded: z.boolean(),
+  allIn: z.boolean(),
+  active: z.boolean(),
+  hasActed: z.boolean(),
+  holeCards: z.array(z.string()),
+  holeCardCount: z.number().int().nonnegative()
+});
+export const pokerPotViewSchema = z.object({
+  amount: z.number().int().nonnegative(),
+  eligiblePlayerIds: z.array(z.string()),
+  cap: z.number().int().nonnegative()
+});
+export const pokerStateViewSchema = z.object({
+  handId: z.string(),
+  variant: gameVariantSchema,
+  status: z.string(),
+  street: z.string(),
+  stateVersion: z.number().int().nonnegative(),
+  dealerSeat: z.number().int().nonnegative(),
+  smallBlindSeat: z.number().int().nonnegative().nullable(),
+  bigBlindSeat: z.number().int().nonnegative().nullable(),
+  currentPlayerId: z.string().nullable(),
+  currentBet: z.number().int().nonnegative(),
+  minimumRaise: z.number().int().nonnegative(),
+  pot: z.number().int().nonnegative(),
+  boards: z.array(z.array(z.string())),
+  players: z.array(pokerPlayerViewSchema),
+  pots: z.array(pokerPotViewSchema),
+  legalActions: z.array(pokerActionSchema),
+  payouts: z.array(z.object({
+    pot: z.number().int().nonnegative(),
+    winners: z.array(z.string()),
+    amountByPlayer: z.record(z.string(), z.number().int().nonnegative()),
+    board: z.number().int().nonnegative().optional()
+  })).optional()
+});
+export type PokerStateView = z.infer<typeof pokerStateViewSchema>;
 export const chatMessageSchema = z.object({
   messageId: z.string(),
   senderNickname: z.string(),
@@ -97,7 +152,8 @@ export const clientEventSchemas = {
   UPDATE_GAME_SETTINGS: updateGameSettingsSchema,
   START_GAME: startGameSchema,
   CHAT_SEND: chatSendSchema,
-  REMOVE_PLAYER: removePlayerSchema
+  REMOVE_PLAYER: removePlayerSchema,
+  POKER_ACTION: pokerActionSchema
 } as const;
 export const serverEventSchemas = {
   TABLE_STATE_SNAPSHOT: tableStateSnapshotSchema,
@@ -108,7 +164,8 @@ export const serverEventSchemas = {
   GAME_STATUS_UPDATED: gameStatusUpdatedSchema,
   ACTION_REJECTED: actionRejectedSchema,
   CHAT_MESSAGE: chatMessageSchema,
-  PLAYER_PRESENCE: playerPresenceSchema
+  PLAYER_PRESENCE: playerPresenceSchema,
+  POKER_STATE_SNAPSHOT: z.object({ pokerState: pokerStateViewSchema })
 } as const;
 export type ClientEventName = keyof typeof clientEventSchemas;
 export type ServerEventName = keyof typeof serverEventSchemas;

@@ -5,9 +5,11 @@ import {
   clientEventSchemas,
   type ClientEventName,
   type ClientEventPayload,
-  type GameConfiguration
+  type GameConfiguration,
+  type PokerAction
 } from "@poker/protocol";
 import { GameStore } from "./store";
+import { applyPokerAction, serializePokerState, startPokerHand } from "./poker";
 
 type BoundSocket = {
   data: { sessionId?: string; gameId?: string };
@@ -31,6 +33,8 @@ const errorMessages: Record<string, string> = {
 export function registerSocket(httpServer: HttpServer, frontendUrl: string, store: GameStore) {
   const io = new Server(httpServer, { cors: { origin: frontendUrl } });
   const lastChatAt = new Map<string, number>();
+  const tableQueues = new Map<string, Promise<void>>();
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const reject = (socket: BoundSocket, event: string, code: string, message?: string) => {
     socket.emit("ACTION_REJECTED", { event, code, message: message ?? errorMessages[code] ?? "Action rejected." });
@@ -39,6 +43,66 @@ export function registerSocket(httpServer: HttpServer, frontendUrl: string, stor
   const broadcastState = (gameId: string) => {
     const game = store.getGame(gameId);
     if (game) io.to(gameId).emit("TABLE_STATE_SNAPSHOT", { tableState: store.snapshot(game) });
+  };
+
+  const broadcastPokerState = async (gameId: string) => {
+    const game = store.getGame(gameId);
+    if (!game?.pokerState) return;
+    for (const connected of await io.in(gameId).fetchSockets()) {
+      const sessionId = (connected.data as { sessionId?: string }).sessionId;
+      if (sessionId) {
+        const pokerState = serializePokerState(game, sessionId);
+        if (pokerState) connected.emit("POKER_STATE_SNAPSHOT", { pokerState });
+      }
+    }
+  };
+
+  const clearTimer = (gameId: string) => {
+    const timer = timers.get(gameId);
+    if (timer) clearTimeout(timer);
+    timers.delete(gameId);
+  };
+
+  const scheduleTimer = (gameId: string) => {
+    clearTimer(gameId);
+    const game = store.getGame(gameId);
+    const currentPlayerId = game?.pokerState?.currentPlayerId;
+    if (!game || !currentPlayerId || game.pokerState?.status === "HAND_COMPLETE") return;
+    const delay = game.configuration.turnTimerSeconds * 1000;
+    timers.set(gameId, setTimeout(() => {
+      void enqueue(gameId, async () => {
+        const current = store.getGame(gameId);
+        if (!current?.pokerState || current.pokerState.currentPlayerId !== currentPlayerId) return;
+        const player = current.pokerState.players.find((item) => item.id === currentPlayerId);
+        if (!player) return;
+        const toCall = Math.max(0, current.pokerState.currentBet - player.streetContribution);
+        try {
+          applyPokerAction(current, currentPlayerId, toCall > 0 ? { type: "FOLD" } : { type: "CHECK" });
+          store.markGameChanged(current);
+          await broadcastPokerState(gameId);
+          broadcastState(gameId);
+          scheduleTimer(gameId);
+        } catch (error) {
+          console.error("Poker turn timeout action failed:", error);
+          clearTimer(gameId);
+        }
+      });
+    }, delay));
+  };
+
+  const enqueue = (gameId: string, operation: () => Promise<void> | void) => {
+    const previous = tableQueues.get(gameId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(operation);
+    tableQueues.set(gameId, next.finally(() => {
+      if (tableQueues.get(gameId) === next) tableQueues.delete(gameId);
+    }));
+    return next;
+  };
+
+  const engineErrorCode = (error: unknown) => {
+    if (error && typeof error === "object" && "code" in error && typeof error.code === "string") return error.code;
+    if (error instanceof Error && error.message === "STALE_STATE") return "STALE_STATE";
+    return "ACTION_NOT_ALLOWED";
   };
 
   io.on("connection", (socket) => {
@@ -73,6 +137,7 @@ export function registerSocket(httpServer: HttpServer, frontendUrl: string, stor
         io.to(game.id).emit("PLAYER_JOINED", { player: store.snapshot(game).players.find((player) => player.sessionId === session.id), stateVersion: game.stateVersion });
       }
       broadcastState(game.id);
+      void broadcastPokerState(game.id);
       io.to(game.id).emit("PLAYER_PRESENCE", { sessionId: session.id, connectionStatus: "CONNECTED", stateVersion: game.stateVersion });
     });
 
@@ -112,9 +177,41 @@ export function registerSocket(httpServer: HttpServer, frontendUrl: string, stor
       const game = session && store.getGame(session.gameId);
       if (!session || !game) return reject(boundSocket, "START_GAME", "SESSION_EXPIRED");
       if (!session.isHost) return reject(boundSocket, "START_GAME", "UNAUTHORIZED");
-      store.start(game);
-      io.to(game.id).emit("GAME_STATUS_UPDATED", { status: game.status, stateVersion: game.stateVersion });
-      broadcastState(game.id);
+      void enqueue(game.id, async () => {
+        try {
+          if (game.status === "PREPARING" && game.pokerState?.status !== "HAND_COMPLETE") {
+            return reject(boundSocket, "START_GAME", "INVALID_GAME_STATE", "The current hand is still in progress.");
+          }
+          store.start(game);
+          startPokerHand(game);
+          store.markGameChanged(game);
+          io.to(game.id).emit("GAME_STATUS_UPDATED", { status: game.status, stateVersion: game.stateVersion });
+          broadcastState(game.id);
+          await broadcastPokerState(game.id);
+          scheduleTimer(game.id);
+        } catch (error) {
+          reject(boundSocket, "START_GAME", engineErrorCode(error), error instanceof Error ? error.message : undefined);
+        }
+      });
+    });
+
+    bindValidated("POKER_ACTION", (payload: PokerAction) => {
+      const session = store.getSession(boundSocket.data.sessionId ?? "");
+      const game = session && store.getGame(session.gameId);
+      if (!session || !game || boundSocket.data.gameId !== game.id) {
+        return reject(boundSocket, "POKER_ACTION", "SESSION_EXPIRED");
+      }
+      void enqueue(game.id, async () => {
+        try {
+          applyPokerAction(game, session.id, payload);
+          store.markGameChanged(game);
+          await broadcastPokerState(game.id);
+          broadcastState(game.id);
+          scheduleTimer(game.id);
+        } catch (error) {
+          reject(boundSocket, "POKER_ACTION", engineErrorCode(error), error instanceof Error ? error.message : undefined);
+        }
+      });
     });
 
     bindValidated("REMOVE_PLAYER", (payload) => {
@@ -152,6 +249,7 @@ export function registerSocket(httpServer: HttpServer, frontendUrl: string, stor
       const game = store.getGame(session.gameId);
       if (!game) return;
       store.setConnection(session, false);
+      if (game.pokerState?.currentPlayerId === session.id) scheduleTimer(game.id);
       io.to(game.id).emit("PLAYER_PRESENCE", { sessionId: session.id, connectionStatus: "DISCONNECTED", stateVersion: game.stateVersion });
     });
   });
