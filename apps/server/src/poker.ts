@@ -30,11 +30,26 @@ export function startPokerHand(game: Game): PokerState {
     maximumPlayers: game.configuration.maxPlayers,
     players: seated.map((session) => ({ id: session.id, nickname: session.nickname, seat: session.seatIndex! }))
   });
+  for (const player of base.players) {
+    const session = game.sessions.get(player.id);
+    player.active = session?.sittingOut !== true;
+  }
   if (game.pokerState && game.pokerState.status !== "HAND_COMPLETE") throw new Error("INVALID_GAME_STATE");
   const state = startHand(base, { smallBlind: game.configuration.smallBlind, bigBlind: game.configuration.bigBlind });
   game.pokerState = state;
   game.lastPayouts = undefined;
   return state;
+}
+
+export function applyRebuy(game: Game, sessionId: string, amount: number) {
+  const player = game.pokerState?.players.find((item) => item.id === sessionId);
+  if (!player || player.stack !== 0 || game.pokerState?.status !== "HAND_COMPLETE") throw new Error("REBUY_NOT_AVAILABLE");
+  player.stack += amount;
+  player.active = true;
+  const session = game.sessions.get(sessionId);
+  if (session) session.sittingOut = false;
+  game.rebuyOffers.delete(sessionId);
+  game.stateVersion += 1;
 }
 
 export function applyPokerAction(game: Game, sessionId: string, input: PokerAction): PokerState {

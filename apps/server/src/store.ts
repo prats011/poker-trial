@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { GameConfiguration, GameStatus, TablePlayer, TableSeat, TableState } from "@poker/protocol";
+import { gameConfigurationSchema, type GameConfiguration, type GameConfigurationInput, type GameStatus, type TablePlayer, type TableSeat, type TableState } from "@poker/protocol";
 import type { Payout } from "@poker/engine";
 import type { PokerState } from "@poker/engine";
 
@@ -10,6 +10,7 @@ export type Session = {
   seatIndex: number | null;
   isHost: boolean;
   connectionStatus: "CONNECTED" | "DISCONNECTED";
+  sittingOut: boolean;
   createdAt: string;
   lastSeenAt: string;
 };
@@ -26,6 +27,7 @@ export type Game = {
   stateVersion: number;
   pokerState?: PokerState;
   lastPayouts?: Payout[];
+  rebuyOffers: Map<string, { expiresAt: number }>;
 };
 
 export type CreateGameResult = { game: Game; inviteToken: string; session: Session };
@@ -51,7 +53,11 @@ export class GameStore {
     void action.catch((error) => console.error("Database persistence failed:", error));
   }
 
-  createGame(configuration: GameConfiguration, nickname: string): CreateGameResult {
+  createGame(configuration: GameConfigurationInput, nickname: string): CreateGameResult {
+    const normalizedConfiguration = gameConfigurationSchema.parse({
+      ...configuration,
+      rebuyMaxAmount: configuration.rebuyMaxAmount ?? configuration.startingStack
+    });
     const now = new Date().toISOString();
     const gameId = randomUUID();
     const inviteToken = randomBytes(32).toString("base64url");
@@ -60,12 +66,13 @@ export class GameStore {
       id: gameId,
       inviteTokenHash: hashSecret(inviteToken),
       hostSessionId,
-      configuration,
+      configuration: normalizedConfiguration,
       status: "WAITING",
       createdAt: now,
       updatedAt: now,
       sessions: new Map(),
-      stateVersion: 1
+      stateVersion: 1,
+      rebuyOffers: new Map()
     };
     const session: Session = {
       id: hostSessionId,
@@ -74,6 +81,7 @@ export class GameStore {
       seatIndex: null,
       isHost: true,
       connectionStatus: "DISCONNECTED",
+      sittingOut: false,
       createdAt: now,
       lastSeenAt: now
     };
@@ -109,7 +117,7 @@ export class GameStore {
       if (this.persistence) this.persist(this.persistence.updateSession(existing));
       return { session: existing, reconnected: true };
     }
-    if (game.status !== "WAITING") throw new Error("GAME_STARTED");
+    if (game.status !== "WAITING") throw new Error(game.status === "ENDED" ? "GAME_ENDED" : "GAME_STARTED");
     if (game.sessions.size >= game.configuration.maxPlayers) throw new Error("TABLE_FULL");
     if ([...game.sessions.values()].some((item) => item.nickname.toLowerCase() === nickname.toLowerCase())) {
       throw new Error("NICKNAME_TAKEN");
@@ -122,6 +130,7 @@ export class GameStore {
       seatIndex: null,
       isHost: false,
       connectionStatus: "DISCONNECTED",
+      sittingOut: false,
       createdAt: now,
       lastSeenAt: now
     };
@@ -147,8 +156,11 @@ export class GameStore {
     }
   }
 
-  updateSettings(game: Game, configuration: GameConfiguration) {
-    game.configuration = configuration;
+  updateSettings(game: Game, configuration: GameConfigurationInput) {
+    game.configuration = gameConfigurationSchema.parse({
+      ...configuration,
+      rebuyMaxAmount: configuration.rebuyMaxAmount ?? configuration.startingStack
+    });
     game.stateVersion += 1;
     game.updatedAt = new Date().toISOString();
     if (this.persistence) this.persist(this.persistence.updateGame(game));
@@ -159,6 +171,15 @@ export class GameStore {
     game.stateVersion += 1;
     game.updatedAt = new Date().toISOString();
     if (this.persistence) this.persist(this.persistence.updateGame(game));
+  }
+
+  setStatus(game: Game, status: GameStatus) {
+    game.status = status;
+    this.markGameChanged(game);
+  }
+
+  invalidateInvite(game: Game) {
+    this.inviteHashes.delete(game.inviteTokenHash);
   }
 
   markGameChanged(game: Game) {
@@ -213,7 +234,9 @@ export class GameStore {
       nickname: session.nickname,
       seatIndex: session.seatIndex,
       isHost: session.isHost,
-      connectionStatus: session.connectionStatus
+      connectionStatus: session.connectionStatus,
+      stack: game.pokerState?.players.find((player) => player.id === session.id)?.stack ?? null,
+      sittingOut: session.sittingOut
     }));
     const seats: TableSeat[] = Array.from({ length: game.configuration.maxPlayers }, (_, seatIndex) => {
       const player = players.find((item) => item.seatIndex === seatIndex);
